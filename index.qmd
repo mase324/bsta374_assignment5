@@ -1,0 +1,367 @@
+---
+title: "Exercise 5 (Extra Credit) --- Local Moran's I"
+subtitle: "BSTA 374 · Optional · up to 5 extra-credit points · Due Wednesday, October 21, 2026, 11:59 pm"
+author: "Maggie Sobaszek · Lehigh University"
+date: last-modified
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    toc-location: left
+    toc-title: "On this page"
+    number-sections: false
+    code-copy: true
+    highlight-style: github
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  eval: true
+  echo: true
+---
+
+## What this exercise is
+
+This exercise is **optional**. It adds up to 5 points to your exercise total;
+skipping it costs nothing.
+
+Exercise 4 ended with global Moran's I: the 2020 COVID-19 SMRs are spatially
+clustered, but the statistic does not say **where**. Here you first map the
+SMR with two colour schemes, then compute **local Moran's I** for each county, map the clusters, and think about what it means to
+run 67 tests at once.
+
+**All the R code is provided.** You do not need to write new code, and you
+do not need to render or publish this one (you may, if you prefer). Open the
+file in RStudio, put
+the CSV in a `data/` folder next to it, and run the chunks one at a time with
+the green ▶ button. Read the output, then type your answer under each
+question. One or two sentences per question is enough.
+
+::: {.callout-important}
+## Submission
+Choose **either** option; both earn the same credit.
+
+- **Option 1:** upload `LASTNAME_FI_Exercise5.qmd`, with your answers typed
+  in, to Course Site. No rendering needed.
+- **Option 2:** render the page, publish it to GitHub Pages as for
+  Exercise 4, and submit the `.qmd` and the page URL.
+
+**Due Wednesday, October 21, 2026 at 11:59 pm.** As it is extra credit, late
+submissions are not accepted.
+:::
+
+::: {.callout-tip}
+## If something does not run
+Restart R (*Session → Restart R*) and run the chunks from the top, in order.
+Most errors come from a chunk skipped or run out of order. If it still fails,
+email me the exact error message --- or answer the questions you can; partial
+answers earn partial credit.
+:::
+
+---
+
+## Step 1 --- Load the data and rebuild Exercise 4 (required, no points)
+
+This chunk repeats Exercise 4: the join, the SMR, the weights and global
+Moran's I. Run it as is.
+
+```{r}
+#| label: setup
+
+library(sf)
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(patchwork)
+library(spdep)
+library(tigris)
+options(tigris_use_cache = TRUE)
+
+covid <- read_csv("data/pa_covid_deaths_2020.csv", show_col_types = FALSE) |>
+  mutate(GEOID = sprintf("%05d", as.integer(FIPS)))      # text key, as in Ex. 4
+pa <- counties(state = "PA", cb = TRUE, year = 2020, progress_bar = FALSE)
+
+pa_covid <- pa |>
+  left_join(covid, by = "GEOID") |>
+  st_transform(5070)
+
+r <- sum(pa_covid$deaths_2020) / sum(pa_covid$Population)   # state rate
+pa_covid <- pa_covid |>
+  mutate(E      = r * Population,                           # expected deaths
+         SMR    = deaths_2020 / E,
+         SMR_lo = qchisq(0.025, 2 * deaths_2020) / (2 * E), # exact 95% CI
+         SMR_hi = qchisq(0.975, 2 * (deaths_2020 + 1)) / (2 * E))
+
+nb <- poly2nb(pa_covid, queen = TRUE)       # queen neighbours
+lw <- nb2listw(nb, style = "W")             # row-standardized
+
+set.seed(374)
+mc <- moran.mc(pa_covid$SMR, lw, nsim = 999)
+mc
+```
+
+**1.** Report global Moran's I. Is it the same value you found in Exercise 4?
+
+**Global Moran's I is 0.29, which is the same as I had in Exercise 4.** 
+
+
+---
+
+## Step 2 --- Map the SMR with two colour schemes (1 point)
+
+We map the **SMR** (standardized mortality ratio): observed deaths divided by
+expected deaths. It is the same ratio as the SIR (standardized incidence
+ratio) from class; SIR is the name used for cases, SMR for deaths. An SMR of 1
+means "as many deaths as expected", above 1 more, below 1 fewer.
+
+The chunk draws the same SMRs twice: once with a **sequential** palette and
+quantile classes, once with a **diverging** palette centred on 1.
+
+```{r}
+#| label: smr-maps
+#| fig-width: 10
+#| fig-height: 3.5
+
+pa_covid <- pa_covid |>
+  mutate(smr_seq = cut(SMR, breaks = quantile(SMR, probs = seq(0, 1, 0.2)),
+                       include.lowest = TRUE, dig.lab = 2),        # 5 quantile classes
+         smr_div = cut(SMR, breaks = c(0, 0.5, 2/3, 0.9, 1/0.9, 1.5, 2, Inf),
+                       labels = c("< 0.50", "0.50-0.67", "0.67-0.90", "0.90-1.11",
+                                  "1.11-1.50", "1.50-2.00", "> 2.00")))  # centred on 1
+
+# scheme 1: sequential
+p_seq <- ggplot(pa_covid) +
+  geom_sf(aes(fill = smr_seq), colour = "white", linewidth = 0.15) +
+  scale_fill_brewer(palette = "PuRd", name = "SMR") +
+  labs(title = "Sequential palette, quantile classes") +
+  theme_void()
+
+# scheme 2: diverging
+p_div <- ggplot(pa_covid) +
+  geom_sf(aes(fill = smr_div), colour = "white", linewidth = 0.15) +
+  scale_fill_brewer(palette = "PiYG", direction = -1, drop = FALSE,
+                    name = "SMR") +                                 # red = above 1
+  labs(title = "Diverging palette, centred on 1") +
+  theme_void()
+
+p_seq + p_div
+
+# the five highest SMRs
+pa_covid |>
+  st_drop_geometry() |>
+  arrange(desc(SMR)) |>
+  select(NAME, deaths_2020, E, SMR) |>
+  head(5)
+```
+
+::: {.callout-tip}
+## Try it
+Change `"YlOrRd"` to another ColorBrewer palette, such as `"Blues"` or
+`"Purples"`, and run the chunk again. Changing the palette name is all it
+takes.
+:::
+
+**2a.** Which counties have the highest SMRs, and in what part of the state
+are they?
+
+**Mifflin, Northumberland, Bedford, Juniata, and Cambria have the highest SMRs in the state. Mifflin, Northumberland, and Juniata are close to the center of the state, Bedford and Cambria are more southwest.**
+
+
+**2b.** Compare the two maps. Which one tells a reader at a glance whether a
+county had **more or fewer deaths than expected**? Why does a diverging palette
+centred on 1 suit an SMR?
+
+**The map with diverging colors tells visually whether there's more or fewer deaths than expected because we can tell that one color set is higher and the other lower.**
+
+---
+
+## Step 3 --- Local Moran's I (1 point)
+
+Local Moran's I gives each county its own statistic. For county $i$,
+
+$$
+I_i = \frac{z_i}{m_2} \sum_j w_{ij} z_j ,
+$$
+
+where $z_i$ is the county's SMR minus the state mean and $\sum_j w_{ij} z_j$ is
+the **average of its neighbours'** deviations (the spatial lag from Exercise 4).
+
+```{r}
+#| label: local-moran
+
+set.seed(374)
+lm_smr <- localmoran_perm(pa_covid$SMR, lw, nsim = 999)
+lm_smr
+
+pa_covid <- pa_covid |>
+  mutate(Ii    = lm_smr[, "Ii"],                             # local I
+         quad  = as.character(attr(lm_smr, "quadr")$mean),   # quadrant
+         p_sim = lm_smr[, "Pr(folded) Sim"])                 # pseudo p-value
+
+# compare the average local I with the global I
+c(mean_local_I = mean(pa_covid$Ii), global_I = unname(mc$statistic))
+
+# counties with the largest local I
+pa_covid |>
+  st_drop_geometry() |>
+  arrange(desc(Ii)) |>
+  select(NAME, SMR, quad, Ii) |>
+  head(6)
+```
+
+**3a.** A county has a large **positive** $I_i$. What does that tell you about
+the county and its neighbours? What would a large **negative** $I_i$ mean?
+
+**A large positive $I_i$ would tell that the county resembles its neighbors (either high-high or low-low). If it was negative, it would be different from its neighbors (high-low or low-high).**
+
+**3b.** Compare the average of the local $I_i$ with the global I. What does
+this tell you about how the local and global statistics are related?
+
+**The mean of the local $I_i$ and global I are the same. Since the local Moran's I looks at each county separately and the Global Moran's I looks at all counties and gives a number that depicts the relationships for each county, they are the same even though if there are individual counties that don't necessarily fall under the same pattern as the rest of the counties.**
+
+**3c.** For county $i$, `localmoran_perm()` keeps the county's own SMR fixed
+and shuffles the other 66 SMRs among its neighbours, 999 times. In your own
+words, what question does this simulation answer for that county?
+
+**By keeping the county's own SMR fixed and shuffling all other counties' SMR, we can see if the relationship between a county and its neighbors is different than what we would see if it was completely random.** 
+
+
+---
+
+## Step 4 --- The LISA cluster map (2 points)
+
+A county is coloured only if its pseudo $p$-value is below 0.05; otherwise it
+is grey.
+
+```{r}
+#| label: lisa-map
+#| fig-width: 10
+#| fig-height: 3.5
+
+lisa_cols <- c("High-High" = "#B2182B", "Low-Low" = "#2166AC",
+               "High-Low" = "#F4A582", "Low-High" = "#92C5DE",
+               "Not significant" = "grey90")
+
+pa_covid <- pa_covid |>
+  mutate(lisa_05 = if_else(p_sim < 0.05, quad, "Not significant"),
+         lisa_05 = factor(lisa_05, levels = names(lisa_cols)))
+
+p_lisa <- ggplot(pa_covid) +
+  geom_sf(aes(fill = lisa_05), colour = "white", linewidth = 0.15) +
+  scale_fill_manual(values = lisa_cols, name = NULL, drop = FALSE) +
+  labs(title = "LISA clusters, p < 0.05",
+       caption = "Source: JHU CSSE COVID-19 Data Repository (PA DOH); Census 2019 estimates.") +
+  theme_void()
+
+p_div + p_lisa
+
+# the significant counties, with their deaths and SMR interval
+pa_covid |>
+  st_drop_geometry() |>
+  filter(lisa_05 != "Not significant") |>
+  arrange(lisa_05, deaths_2020) |>
+  select(NAME, lisa_05, deaths_2020, SMR, SMR_lo, SMR_hi, p_sim)
+```
+
+**4a.** Describe where the High--High and Low--Low clusters are, naming a few
+counties and the part of the state.
+
+**Low-low cluster is in the northwest part of the state with McKean, Forest, and Elk counties. The High-high clusters are in more of the central part of the state with Huntingdon and Juniata counties.** 
+
+**4b.** Mifflin has the highest SMR in the state. Is it in a significant
+cluster? Why might a county with a very high SMR not be?
+
+**Mifflin isn't in a significant cluster in the LISA map. A colored county is the core of a local pattern where its neighbors are part of it even when they stay grey. Having a high SMR doesn't necessarily mean that neighboring counties also have high SMRs or that the pattern is off enough to be statistically significant. Counties with relatively few expected deaths can also have extreme SMRs because even a small increase in deaths can have a large effect on the ratio.**
+
+
+**4c.** Look at the number of deaths in the table. Does any significant county
+rest on very few deaths? Using its 95% interval, explain why that should make
+us cautious about its colour on the map.
+
+**Cameron county had 4 deaths, and expected number of deaths was 5. Confidence interval [.20, 1.84] passed through 1. The interval has to be larger because it's based on so few deaths, so the SMR may not be very precise. A county with few expected cases can produce an extreme SMR, and a “cluster” by chance.**
+
+**4d.** Open your Moran scatterplot from Exercise 4 (Part E4). It places every
+county in one of the four quadrants, and the LISA map uses the same quadrants.
+Yet many counties that sat in the High--High or Low--Low quadrant of the
+scatterplot are grey here. Why? What does the LISA map add that the
+scatterplot does not?
+
+**The LISA map adds in whether a county's relationship with its neighbors is statistically significant, so if it's not significant in the LISA map, the county is gray.**
+
+---
+
+## Step 5 --- Many tests at once (1 point)
+
+The map above comes from 67 separate tests, one per county. Some counties will
+look significant by chance alone.
+
+```{r}
+#| label: multiple-testing
+#| fig-width: 10
+#| fig-height: 3.5
+
+# adjust the p-values for 67 tests (Benjamini-Hochberg)
+pa_covid <- pa_covid |>
+  mutate(p_bh    = p.adjust(p_sim, method = "BH"),
+         lisa_bh = if_else(p_bh < 0.05, quad, "Not significant"),
+         lisa_bh = factor(lisa_bh, levels = names(lisa_cols)))
+
+tibble(adjustment = c("none", "Benjamini-Hochberg"),
+       counties_flagged = c(sum(pa_covid$p_sim < 0.05),
+                            sum(pa_covid$p_bh  < 0.05)))
+
+##list of significant counties under Benjamini-Hochberg correction
+pa_covid |>
+  st_drop_geometry() |>
+  filter(p_bh < 0.05) |>
+  select(NAME, quad, p_sim, p_bh) |>
+  arrange(p_bh)
+
+# unadjusted and adjusted maps side by side
+p_bh <- ggplot(pa_covid) +
+  geom_sf(aes(fill = lisa_bh), colour = "white", linewidth = 0.15) +
+  scale_fill_manual(values = lisa_cols, name = NULL, drop = FALSE) +
+  labs(title = "LISA clusters, adjusted (BH)") +
+  theme_void()
+
+p_lisa + p_bh
+```
+
+
+
+
+
+**5a.** If the SMRs were arranged completely at random, about how many of the
+67 counties would you expect to be "significant" at 0.05 just by chance? How
+does that compare with the number on your map?
+
+**I would expect 4 counties to be significant, which is less than what is seen with no adjustment but the same that we see with Benjamini-Hochberg correction.**
+
+**5b.** The Benjamini--Hochberg adjustment accounts for running 67 tests. How
+many counties are still coloured after the adjustment, and which ones? What
+does it mean for the counties that turned grey?
+
+**After the adjustment, four counties are still colored - Warren, Elk, Cameron, and Snyder. The counties that turned gray are no longer statistically significant under the Bejamini-Hochberg correction, and also had the smallest p-values without correction.**
+
+---
+
+## AI use note
+
+End your document with one sentence on whether and how you used AI tools.
+It carries no points.
+**I used ChatGPT to help me understand the question and how to answer 4b. To get the code to get a list of the significant counties under the Benjamini-Hochberg correction I used ChatGPT.**
+---
+
+## Points
+
+| Step | What earns the points | Points |
+|---|---|---|
+| 1 | Global I reported and matched to Exercise 4 | required |
+| 2 | SMR mapped; highest counties named; two colour schemes compared | 1 |
+| 3 | Local I interpreted; link to global I; conditional permutation explained | 1 |
+| 4 | Clusters described; Mifflin explained; small counts linked to intervals; link to the Moran scatterplot | 2 |
+| 5 | Chance expectation; adjusted map read | 1 |
+| | **Total (extra credit)** | **5** |
+
+Clear, simple sentences are what earn the points; length does not.
